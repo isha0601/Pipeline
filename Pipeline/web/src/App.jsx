@@ -62,7 +62,12 @@ export default function App() {
         <ul>
           {docs.map(d => (
             <li key={d.id}>
-              <b>{d.file_name}</b> — {new Date(d.uploaded_at).toLocaleString()} (mime: {d.mime_type || 'n/a'})
+{/*               <b>{d.file_name}</b> — {new Date(d.uploaded_at).toLocaleString()} (mime: {d.mime_type || 'n/a'}) */}
+               <a href={d.file_url} target="_blank" rel="noopener noreferrer">
+          {d.file_name}
+        </a>{" "}
+        — {new Date(d.uploaded_at).toLocaleString()} (mime: {d.mime_type || 'n/a'})
+      </li>
             </li>
           ))}
         </ul>
@@ -86,3 +91,4 @@ export default function App() {
     </div>
   );
 }
+
