@@ -90,7 +90,7 @@ import multer from "multer";
 import fs from "fs/promises";
 import path from "path";
 import cors from "cors";
-import { processAndIndex, listHistory, semanticSearch } from "./pipeline.js";
+import { processAndIndex, listHistory, semanticSearch, getDocumentText } from "./pipeline.js";
 
 const app = express();
 app.use(
@@ -115,6 +115,21 @@ app.use((req, res, next) => {
 
 // Health
 app.get("/health", (_, res) => res.json({ ok: true }));
+
+// Root - helpful message instead of "Cannot GET /"
+app.get("/", (_, res) => {
+  res.type("text/plain").send(
+    [
+      "Doc Pipeline API is running.",
+      "",
+      "Available endpoints:",
+      "GET  /health",
+      "GET  /history?user_id=<id>",
+      "GET  /search?q=<query>&topK=5[&documentId=<id>]",
+      "POST /upload  (multipart/form-data: file, user_id)",
+    ].join("\n")
+  );
+});
 
 // Upload endpoint
 app.post("/upload", upload.single("file"), async (req, res) => {
@@ -174,6 +189,16 @@ app.get("/search", async (req, res) => {
 
     console.log("✅ semanticSearch finished in", Date.now() - t0, "ms");
     res.json({ results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get plain text of a document
+app.get("/documents/:id/text", async (req, res) => {
+  try {
+    const text = await getDocumentText(req.params.id);
+    res.type("text/plain").send(text);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
