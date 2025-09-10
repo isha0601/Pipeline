@@ -89,16 +89,44 @@ export async function processAndIndex({
   return doc;
 }
 
+// export async function listHistory({ userId }) {
+//   const q = supabase
+//     .from("documents")
+//     .select("*")
+//     .order("uploaded_at", { ascending: false });
+//   if (userId) q.eq("user_id", userId);
+//   const { data, error } = await q;
+//   if (error) throw error;
+//   return data;
+// }
 export async function listHistory({ userId }) {
   const q = supabase
     .from("documents")
     .select("*")
     .order("uploaded_at", { ascending: false });
   if (userId) q.eq("user_id", userId);
+
   const { data, error } = await q;
   if (error) throw error;
-  return data;
+
+  // Add signed URL for each file (valid for 1 hour)
+  const docsWithUrls = await Promise.all(
+    data.map(async (doc) => {
+      const { data: signed, error: signedError } = await supabase.storage
+        .from(process.env.SUPABASE_BUCKET)
+        .createSignedUrl(doc.storage_path, 60 * 60); // 1 hour
+      if (signedError) throw signedError;
+
+      return {
+        ...doc,
+        file_url: signed.signedUrl, // this is what frontend should open
+      };
+    })
+  );
+
+  return docsWithUrls;
 }
+
 
 export async function semanticSearch({ query, topK = 5, documentId = null }) {
   const [emb] = await embedTexts([query]);
@@ -110,3 +138,4 @@ export async function semanticSearch({ query, topK = 5, documentId = null }) {
   if (error) throw error;
   return data;
 }
+
