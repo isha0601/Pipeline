@@ -3,7 +3,6 @@ import { extractText, chunkText } from "./text.js";
 import fs from "fs/promises";
 import { OpenAI } from "openai";
 import path from "path";
-import crypto from "crypto";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -56,38 +55,33 @@ export async function processAndIndex({
   sizeBytes,
   userId,
 }) {
-  // 1) extract text from the uploaded file
+  // 1) extract text from the uploaded file (do not store any file)
   const fullText = await extractText(tmpPath, mime);
 
-  // 2) persist a .txt version and store that in Supabase instead of the original
+  // 2) Optionally keep original for viewing (controlled by env KEEP_ORIGINAL)
+  const keepOriginal = String(process.env.KEEP_ORIGINAL).toLowerCase() === "true";
+  const storage_path = keepOriginal
+    ? await storeFileToSupabase(tmpPath, fileName, mime)
+    : null;
+
+  // 3) create document row (points to original if kept; otherwise plain text only)
   const baseName = path.parse(fileName).name;
-  const uniqueId = crypto.randomUUID();
-  const txtFileName = `${baseName}.txt`;
-  const txtTmpPath = path.join("uploads", `${uniqueId}-${txtFileName}`);
-  await fs.writeFile(txtTmpPath, fullText, "utf8");
-
-  const storage_path = await storeFileToSupabase(txtTmpPath, txtFileName, "text/plain");
-
-  // 3) create document row pointing to the stored .txt
   const doc = await insertDocumentRecord({
     user_id: userId || null,
-    file_name: txtFileName,
+    file_name: keepOriginal ? fileName : baseName,
     storage_path,
-    mime_type: "text/plain",
-    size_bytes: Buffer.byteLength(fullText, "utf8"),
+    mime_type: keepOriginal ? mime : "text/plain",
+    size_bytes: keepOriginal ? sizeBytes : Buffer.byteLength(fullText, "utf8"),
   });
 
-  // cleanup temp txt file
-  await fs.unlink(txtTmpPath).catch(() => {});
-
-  // 4) chunk -> embed
+  // 3) chunk -> embed
   const chunks = chunkText(fullText);
 
   if (chunks.length === 0) return doc;
 
   const vectors = await embedTexts(chunks);
 
-  // 5) insert chunks with embeddings
+  // 4) insert chunks with embeddings
   const rows = chunks.map((content, i) => ({
     document_id: doc.id,
     chunk_index: i,
@@ -121,18 +115,17 @@ export async function listHistory({ userId }) {
   const { data, error } = await q;
   if (error) throw error;
 
-  // Add signed URL for each file (valid for 1 hour)
+  // Add signed URL for each file if it exists (valid for 1 hour)
   const docsWithUrls = await Promise.all(
     data.map(async (doc) => {
-      const { data: signed, error: signedError } = await supabase.storage
-        .from(process.env.SUPABASE_BUCKET)
-        .createSignedUrl(doc.storage_path, 60 * 60); // 1 hour
-      if (signedError) throw signedError;
-
-      return {
-        ...doc,
-        file_url: signed.signedUrl, // this is what frontend should open
-      };
+      if (doc.storage_path) {
+        const { data: signed, error: signedError } = await supabase.storage
+          .from(process.env.SUPABASE_BUCKET)
+          .createSignedUrl(doc.storage_path, 60 * 60); // 1 hour
+        if (signedError) throw signedError;
+        return { ...doc, file_url: signed.signedUrl };
+      }
+      return { ...doc };
     })
   );
 
@@ -149,5 +142,18 @@ export async function semanticSearch({ query, topK = 5, documentId = null }) {
   });
   if (error) throw error;
   return data;
+}
+
+export async function getDocumentText(documentId) {
+  const { data, error } = await supabase
+    .from("doc_chunks")
+    .select("content, chunk_index")
+    .eq("document_id", documentId)
+    .order("chunk_index", { ascending: true });
+  if (error) throw error;
+  const text = (data || [])
+    .map((r) => r.content || "")
+    .join("\n\n");
+  return text;
 }
 
