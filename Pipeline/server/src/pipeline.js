@@ -3,6 +3,7 @@ import { extractText, chunkText } from "./text.js";
 import fs from "fs/promises";
 import { OpenAI } from "openai";
 import path from "path";
+import crypto from "crypto";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -55,27 +56,38 @@ export async function processAndIndex({
   sizeBytes,
   userId,
 }) {
-  // 1) store raw file
-  const storage_path = await storeFileToSupabase(tmpPath, fileName, mime);
+  // 1) extract text from the uploaded file
+  const fullText = await extractText(tmpPath, mime);
 
-  // 2) create document row
+  // 2) persist a .txt version and store that in Supabase instead of the original
+  const baseName = path.parse(fileName).name;
+  const uniqueId = crypto.randomUUID();
+  const txtFileName = `${baseName}.txt`;
+  const txtTmpPath = path.join("uploads", `${uniqueId}-${txtFileName}`);
+  await fs.writeFile(txtTmpPath, fullText, "utf8");
+
+  const storage_path = await storeFileToSupabase(txtTmpPath, txtFileName, "text/plain");
+
+  // 3) create document row pointing to the stored .txt
   const doc = await insertDocumentRecord({
     user_id: userId || null,
-    file_name: fileName,
+    file_name: txtFileName,
     storage_path,
-    mime_type: mime,
-    size_bytes: sizeBytes,
+    mime_type: "text/plain",
+    size_bytes: Buffer.byteLength(fullText, "utf8"),
   });
 
-  // 3) extract -> chunk -> embed
-  const fullText = await extractText(tmpPath, mime);
+  // cleanup temp txt file
+  await fs.unlink(txtTmpPath).catch(() => {});
+
+  // 4) chunk -> embed
   const chunks = chunkText(fullText);
 
   if (chunks.length === 0) return doc;
 
   const vectors = await embedTexts(chunks);
 
-  // 4) insert chunks with embeddings
+  // 5) insert chunks with embeddings
   const rows = chunks.map((content, i) => ({
     document_id: doc.id,
     chunk_index: i,
